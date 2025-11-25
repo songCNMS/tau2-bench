@@ -1,12 +1,16 @@
 import json
 import re
+import os
 from typing import Any, Optional
-
+from openai import OpenAI
 import litellm
 from litellm import completion, completion_cost
 from litellm.caching.caching import Cache
 from litellm.main import ModelResponse, Usage
 from loguru import logger
+from openai import AzureOpenAI
+from azure.identity import ChainedTokenCredential, AzureCliCredential, ManagedIdentityCredential, get_bearer_token_provider
+
 
 from tau2.config import (
     DEFAULT_LLM_CACHE_TYPE,
@@ -177,6 +181,52 @@ def to_litellm_messages(messages: list[Message]) -> list[dict]:
     return litellm_messages
 
 
+
+def to_aglllm_messages(messages: list[Message]) -> list[dict]:
+    """
+    Convert a list of Tau2 messages to a list of AGL messages.
+    """
+    agl_messages = []
+    for message in messages:
+        if isinstance(message, UserMessage):
+            agl_messages.append({"role": "user", "content": message.content})
+        elif isinstance(message, AssistantMessage):
+            tool_calls = None
+            if message.is_tool_call():
+                tool_calls = [
+                    {
+                        "id": tc.id,
+                        "name": tc.name,
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments),
+                        },
+                        "type": "function",
+                    }
+                    for tc in message.tool_calls
+                ]
+            agl_messages.append(
+                {
+                    "role": "assistant",
+                    "content": message.content,
+                    "tool_calls": tool_calls,
+                }
+            )
+        elif isinstance(message, ToolMessage):
+            agl_messages.append(
+                {
+                    "role": "tool",
+                    "content": message.content,
+                    "tool_call_id": message.id,
+                }
+            )
+        elif isinstance(message, SystemMessage):
+            agl_messages.append({"role": "system", "content": message.content})
+    return agl_messages
+
+
+
+
 def generate(
     model: str,
     messages: list[Message],
@@ -206,13 +256,38 @@ def generate(
     if tools and tool_choice is None:
         tool_choice = "auto"
     try:
-        response = completion(
-            model=model,
-            messages=litellm_messages,
-            tools=tools,
-            tool_choice=tool_choice,
-            **kwargs,
-        )
+        if os.getenv("OPENAI_API_TYPE", "KEY").lower() == "key":
+            response = completion(
+                model=model,
+                messages=litellm_messages,
+                tools=tools,
+                api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+                api_version=os.getenv("OPENAI_API_VERSION"),
+                tool_choice=tool_choice,
+                **kwargs,
+            )
+        else:
+            scope = os.environ.get("AZURE_BEARER_TOKEN_SCOPE", "api://trapi/.default")
+            client_id = os.environ.get("AZURE_CLIENT_ID")
+            credential = get_bearer_token_provider(ChainedTokenCredential(
+                AzureCliCredential(),
+                ManagedIdentityCredential(client_id=client_id)
+            ),scope)
+            api_version = os.getenv("OPENAI_API_VERSION")
+            # deployment_name = os.getenv("AZURE_DEPLOYMENT_NAME")
+            endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+        
+            response = completion(
+                model=model,
+                messages=litellm_messages,
+                tools=tools,
+                api_base=endpoint,
+                api_version=api_version,
+                azure_ad_token_provider=credential,
+                tool_choice=tool_choice,
+                **kwargs,
+            )
     except Exception as e:
         logger.error(e)
         raise e
@@ -250,6 +325,90 @@ def generate(
         raw_data=response.to_dict(),
     )
     return message
+
+
+def agl_generate(
+    model: str,
+    llm_endpoint: str,
+    messages: list[Message],
+    tools: Optional[list[Tool]] = None,
+    tool_choice: Optional[str] = None,
+    **kwargs: Any,
+) -> UserMessage | AssistantMessage:
+    """
+    Generate a response from the model.
+
+    Args:
+        model: The model to use.
+        llm_endpoint: The endpoint of the model to use.
+        messages: The messages to send to the model.
+        tools: The tools to use.
+        tool_choice: The tool choice to use.
+        **kwargs: Additional arguments to pass to the model.
+
+    Returns: A tuple containing the message and the cost.
+    """
+    if kwargs.get("num_retries") is None:
+        kwargs["num_retries"] = DEFAULT_MAX_RETRIES
+        
+    client = OpenAI(
+        base_url=llm_endpoint,
+        api_key=os.environ.get("OPENAI_API_KEY", "token-abc123"),
+    )
+
+    agl_messages = to_aglllm_messages(messages)
+    tools = [tool.openai_schema for tool in tools] if tools else None
+    if tools and tool_choice is None:
+        tool_choice = "auto"
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=agl_messages,
+            temperature=kwargs.get("temperature", 0.7),
+            max_tokens=kwargs.get("max_tokens", 1024),
+            tools=tools,
+            tool_choice=tool_choice,
+            **kwargs,
+        )
+
+    except Exception as e:
+        logger.error(e)
+        raise e
+    cost = get_response_cost(response)
+    usage = get_response_usage(response)
+    response = response.choices[0]
+    try:
+        finish_reason = response.finish_reason
+        if finish_reason == "length":
+            logger.warning("Output might be incomplete due to token limit!")
+    except Exception as e:
+        logger.error(e)
+        raise e
+    assert response.message.role == "assistant", (
+        "The response should be an assistant message"
+    )
+    content = response.message.content
+    tool_calls = response.message.tool_calls or []
+    tool_calls = [
+        ToolCall(
+            id=tool_call.id,
+            name=tool_call.function.name,
+            arguments=json.loads(tool_call.function.arguments),
+        )
+        for tool_call in tool_calls
+    ]
+    tool_calls = tool_calls or None
+
+    message = AssistantMessage(
+        role="assistant",
+        content=content,
+        tool_calls=tool_calls,
+        cost=cost,
+        usage=usage,
+        raw_data=response.to_dict(),
+    )
+    return message
+
 
 
 def get_cost(messages: list[Message]) -> tuple[float, float] | None:

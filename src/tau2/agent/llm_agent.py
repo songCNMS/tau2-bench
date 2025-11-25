@@ -19,7 +19,9 @@ from tau2.data_model.message import (
 )
 from tau2.data_model.tasks import Action, Task
 from tau2.environment.tool import Tool, as_tool
-from tau2.utils.llm_utils import generate
+from tau2.utils.llm_utils import generate, agl_generate
+import agentlightning as agl
+
 
 AGENT_INSTRUCTION = """
 You are a customer service agent that helps the user according to the <policy> provided below.
@@ -122,6 +124,54 @@ class LLMAgent(LocalAgent[LLMAgentState]):
         if cur_seed is not None:
             logger.warning(f"Seed is already set to {cur_seed}, resetting it to {seed}")
         self.llm_args["seed"] = seed
+
+
+
+class LLMAGLAgent(LLMAgent):
+    """
+    An AGL agent that can be used to solve a task.
+    """
+
+    def __init__(
+        self,
+        tools: List[Tool],
+        domain_policy: str,
+        llm: Optional[str] = None,
+        llm_args: Optional[dict] = None,
+    ):
+        """
+        Initialize the LLMAgent.
+        """
+        super().__init__(tools=tools, domain_policy=domain_policy)
+        self.llm = llm
+        self.llm_args = deepcopy(llm_args) if llm_args is not None else {}
+
+    def generate_next_message(
+        self, message: ValidAgentInputMessage, state: LLMAgentState
+    ) -> tuple[AssistantMessage, LLMAgentState]:
+        """
+        Respond to a user or tool message.
+        """
+        if isinstance(message, MultiToolMessage):
+            state.messages.extend(message.tool_messages)
+        else:
+            state.messages.append(message)
+        messages = state.system_messages + state.messages
+        endpoint = self.llm_args.pop("llm_endpoint", None)
+        assistant_message = agl_generate(
+            model=self.llm,
+            llm_endpoint=endpoint,
+            tools=self.tools,
+            messages=messages,
+            **self.llm_args,
+        )
+        state.messages.append(assistant_message)
+        return assistant_message, state
+        
+        
+
+
+
 
 
 AGENT_GT_INSTRUCTION = """
