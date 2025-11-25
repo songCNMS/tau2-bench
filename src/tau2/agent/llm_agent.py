@@ -1,6 +1,6 @@
 from copy import deepcopy
 from typing import List, Optional
-
+import json
 from loguru import logger
 from pydantic import BaseModel
 
@@ -157,11 +157,14 @@ class LLMAGLAgent(LLMAgent):
         else:
             state.messages.append(message)
         messages = state.system_messages + state.messages
+        prompt_len = sum([len(str(m)) for m in messages])
+        if prompt_len > 10000:
+            logger.warning(f"Message size is large: {prompt_len} characters")
+            messages = state.system_messages + state.messages[-4:]
+
         logger.info(f"llm_args: {self.llm_args}")
-        # endpoint = self.llm_args.get("llm_endpoint", None)
         assistant_message = agl_generate(
             model=self.llm,
-            # llm_endpoint=endpoint,
             tools=self.tools,
             messages=messages,
             **self.llm_args,
