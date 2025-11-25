@@ -93,10 +93,11 @@ def get_response_cost(response: ModelResponse) -> float:
     """
     Get the cost of the response from the litellm completion.
     """
-    response.model = _parse_ft_model_name(
-        response.model
-    )  # FIXME: Check Litellm, passing the model to completion_cost doesn't work.
+
     try:
+        response.model = _parse_ft_model_name(
+            response.model
+        )  # FIXME: Check Litellm, passing the model to completion_cost doesn't work.
         cost = completion_cost(completion_response=response)
     except Exception as e:
         logger.error(e)
@@ -105,13 +106,17 @@ def get_response_cost(response: ModelResponse) -> float:
 
 
 def get_response_usage(response: ModelResponse) -> Optional[dict]:
-    usage: Optional[Usage] = response.get("usage")
-    if usage is None:
+    try:
+        usage: Optional[Usage] = response.get("usage")
+        if usage is None:
+            return None
+        return {
+            "completion_tokens": usage.completion_tokens,
+            "prompt_tokens": usage.prompt_tokens,
+        }
+    except Exception as e:
+        logger.error(e)
         return None
-    return {
-        "completion_tokens": usage.completion_tokens,
-        "prompt_tokens": usage.prompt_tokens,
-    }
 
 
 def to_tau2_messages(
@@ -355,7 +360,8 @@ def agl_generate(
         base_url=llm_endpoint,
         api_key=os.environ.get("OPENAI_API_KEY", "token-abc123"),
     )
-
+    logger.info(f"AGL Generate using model: {model} at endpoint: {llm_endpoint}, key: {os.environ.get('OPENAI_API_KEY', 'token-abc123')[-6:]}")
+    
     agl_messages = to_aglllm_messages(messages)
     tools = [tool.openai_schema for tool in tools] if tools else None
     if tools and tool_choice is None:
@@ -368,7 +374,6 @@ def agl_generate(
             max_tokens=kwargs.get("max_tokens", 1024),
             tools=tools,
             tool_choice=tool_choice,
-            **kwargs,
         )
 
     except Exception as e:

@@ -157,10 +157,11 @@ class LLMAGLAgent(LLMAgent):
         else:
             state.messages.append(message)
         messages = state.system_messages + state.messages
-        endpoint = self.llm_args.pop("llm_endpoint", None)
+        logger.info(f"llm_args: {self.llm_args}")
+        # endpoint = self.llm_args.get("llm_endpoint", None)
         assistant_message = agl_generate(
             model=self.llm,
-            llm_endpoint=endpoint,
+            # llm_endpoint=endpoint,
             tools=self.tools,
             messages=messages,
             **self.llm_args,
