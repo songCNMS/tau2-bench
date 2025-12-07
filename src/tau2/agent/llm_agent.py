@@ -19,7 +19,7 @@ from tau2.data_model.message import (
 )
 from tau2.data_model.tasks import Action, Task
 from tau2.environment.tool import Tool, as_tool
-from tau2.utils.llm_utils import generate, agl_generate
+from tau2.utils.llm_utils import generate, agl_generate, agl_tc_generate
 import agentlightning as agl
 
 
@@ -145,6 +145,7 @@ class LLMAGLAgent(LLMAgent):
         super().__init__(tools=tools, domain_policy=domain_policy)
         self.llm = llm
         self.llm_args = deepcopy(llm_args) if llm_args is not None else {}
+        self.tc_option = self.llm_args.get("tc_option", True)
 
     def generate_next_message(
         self, message: ValidAgentInputMessage, state: LLMAgentState
@@ -158,17 +159,25 @@ class LLMAGLAgent(LLMAgent):
             state.messages.append(message)
         messages = state.system_messages + state.messages
         prompt_len = sum([len(str(m)) for m in messages])
-        if prompt_len > 10000:
+        if prompt_len > 20480:
             logger.warning(f"Message size is large: {prompt_len} characters")
             messages = state.system_messages + state.messages[-4:]
 
         logger.info(f"llm_args: {self.llm_args}")
-        assistant_message = agl_generate(
-            model=self.llm,
-            tools=self.tools,
-            messages=messages,
-            **self.llm_args,
-        )
+        if self.tc_option == "true":
+            assistant_message = agl_tc_generate(
+                model=self.llm,
+                tools=self.tools,
+                messages=messages,
+                **self.llm_args,    
+            )
+        else:
+            assistant_message = agl_generate(
+                model=self.llm,
+                tools=self.tools,
+                messages=messages,
+                **self.llm_args,
+            )
         state.messages.append(assistant_message)
         return assistant_message, state
         

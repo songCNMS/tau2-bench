@@ -10,6 +10,12 @@ from litellm.main import ModelResponse, Usage
 from loguru import logger
 from openai import AzureOpenAI
 from azure.identity import ChainedTokenCredential, AzureCliCredential, ManagedIdentityCredential, get_bearer_token_provider
+# from prompt_templates import *
+# from agent_data_sft import parse_tool_call
+import uuid
+import pickle
+from string import Template
+import ast
 
 
 from tau2.config import (
@@ -87,6 +93,26 @@ def _parse_ft_model_name(model: str) -> str:
         return match.group("model")
     else:
         return model
+
+
+
+def parse_tool_call(tool_call):
+    matches = re.findall(r"<tool_call>(.*?)</tool_call>", tool_call, re.DOTALL)
+    tool_call_str = matches[-1] if matches else tool_call
+    tool_name = tool_call_str[ : tool_call_str.find("(")].strip()
+    try:
+        tool_args = ast.literal_eval(
+            tool_call_str[tool_call_str.find("{") : tool_call_str.rfind("}")+1].strip().replace("\n", "").replace("\\", "")
+        )
+    except Exception as e:
+        logger.info(f"Error parsing tool args: {e}")
+        tool_args = {}
+    ans = None
+    matches = re.findall(r"<answer>(.*?)</answer>", tool_call, re.DOTALL)
+    if matches:
+        ans = matches[0].strip()
+    return {"name": tool_name, "arguments": tool_args, "answer": ans}
+
 
 
 def get_response_cost(response: ModelResponse) -> float:
@@ -332,7 +358,7 @@ def generate(
     return message
 
 
-def agl_generate(
+def agl_tc_generate(
     model: str,
     llm_endpoint: str,
     messages: list[Message],
@@ -413,6 +439,116 @@ def agl_generate(
         raw_data=response.to_dict(),
     )
     return message
+
+
+
+
+def agl_generate(
+    model: str,
+    llm_endpoint: str,
+    messages: list[Message],
+    tools: Optional[list[Tool]] = None,
+    tool_choice: Optional[str] = None,
+    **kwargs: Any,
+) -> UserMessage | AssistantMessage:
+    """
+    Generate a response from the model.
+
+    Args:
+        model: The model to use.
+        llm_endpoint: The endpoint of the model to use.
+        messages: The messages to send to the model.
+        tools: The tools to use.
+        tool_choice: The tool choice to use.
+        **kwargs: Additional arguments to pass to the model.
+
+    Returns: A tuple containing the message and the cost.
+    """
+    if kwargs.get("num_retries") is None:
+        kwargs["num_retries"] = DEFAULT_MAX_RETRIES
+
+    with open(f"/mnt/storage/data/tau/prompts/all_prompts.pkl", "rb") as f:
+        all_prompts = pickle.load(f)
+        
+    client = OpenAI(
+        base_url=llm_endpoint,
+        api_key=os.environ.get("OPENAI_API_KEY", "token-abc123"),
+    )
+    logger.info(f"AGL Generate using model: {model} at endpoint: {llm_endpoint}, key: {os.environ.get('OPENAI_API_KEY', 'token-abc123')[-6:]}")
+    
+    retrieved_context_list = []
+    for message in messages:
+        # logger.info(f"Processing message: {message}")
+        if isinstance(message, UserMessage):
+            retrieved_context_list.append(f"{message.role}: {message.content}")
+        elif isinstance(message, AssistantMessage):
+            tool_calls = None
+            if message.is_tool_call():
+                for tc in message.tool_calls:
+                    retrieved_context_list.append(f"<tool_call>{tc.name}({tc.arguments})</tool_call>")
+        elif isinstance(message, ToolMessage):
+            retrieved_context_list.append(f"<tool_response>{message.content}</tool_response>")
+        
+    retrieved_context = "\n".join(retrieved_context_list)
+    prompt = all_prompts["tool_calling_template"].substitute(
+        existing_context=retrieved_context,
+        available_tools=all_prompts["tool_calling_prompt"],
+        instructions=all_prompts["tool_calling_instructions"],
+    )
+    agl_messages=[{"role": "system", "content": all_prompts["tool_calling_system_prompt"]}, {"role": "user", "content": prompt}]
+
+    try:
+        ori_response = client.chat.completions.create(
+            model=model,
+            messages=agl_messages,
+            temperature=kwargs.get("temperature", 0.7),
+            max_tokens=kwargs.get("max_tokens", 1024),
+        )
+        response = ori_response.choices[0].message.content
+        # logger.info(f"AGL Tool Call Prompt: {prompt}")
+        # logger.info(f"AGL Tool Call Response: {response}")
+
+        cost = get_response_cost(ori_response)
+        usage = get_response_usage(ori_response)
+
+        resp = parse_tool_call(response)
+        tool_name = resp["name"]
+        function_tool_dict = all_prompts["function_tool_dict"]
+        tool_calls = []
+        if tool_name in function_tool_dict:
+            content = f"Decide to call tool {tool_name}."
+            tool_calls = [
+                ToolCall(
+                    id=str(uuid.uuid1()),
+                    name=resp["name"],
+                    arguments=resp["arguments"],
+                )
+            ]
+        elif tool_name == all_prompts["termination_tool"]:
+            content = "Decide to stop tool calling and return to the user."
+        else:
+            content = f"Tool {tool_name} not found. Valid tools are: {list(function_tool_dict.keys())}. The correct tool calling format shall be: <tool_call> <<placeholder for the called tool name>> ({{\"parameter\": \"value\", ...}}) </tool_call>."
+            logger.info(content)
+    except Exception as e:
+        logger.error(e)
+        tool_calls = None
+        content = "Error occurred during tool call parsing."
+        cost = 0.0
+        usage = None
+        # raise e
+   
+    tool_calls = tool_calls or None
+
+    message = AssistantMessage(
+        role="assistant",
+        content=content,
+        tool_calls=tool_calls,
+        cost=cost,
+        usage=usage,
+        raw_data={},
+    )
+    return message
+
 
 
 
