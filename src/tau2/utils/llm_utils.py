@@ -420,20 +420,31 @@ def agl_tc_generate(
     )
     content = response.message.content
     tool_calls = response.message.tool_calls or []
-    tool_calls = [
-        ToolCall(
-            id=tool_call.id,
-            name=tool_call.function.name,
-            arguments=json.loads(tool_call.function.arguments),
+    
+    agl_tool_calls = []
+    for tool_call in tool_calls:
+        try:
+            arguments_str = tool_call.function.arguments
+            arguments_str = arguments_str.replace('\n', '').replace('\\', '')
+            arguments_str = arguments_str[arguments_str.find("{") : arguments_str.rfind("}")+1].strip()
+            arguments = ast.literal_eval(arguments_str)
+        except Exception as e:
+            logger.info(f"Error parsing tool args: {e}, arguments_str: {arguments_str}")
+            arguments = {}
+        agl_tool_calls.append(
+            ToolCall(
+                id=tool_call.id,
+                name=tool_call.function.name,
+                arguments=arguments,
+            )
         )
-        for tool_call in tool_calls
-    ]
-    tool_calls = tool_calls or None
+
+    agl_tool_calls = agl_tool_calls or None
 
     message = AssistantMessage(
         role="assistant",
         content=content,
-        tool_calls=tool_calls,
+        tool_calls=agl_tool_calls,
         cost=cost,
         usage=usage,
         raw_data=response.to_dict(),
@@ -479,15 +490,14 @@ def agl_generate(
     retrieved_context_list = []
     for message in messages:
         # logger.info(f"Processing message: {message}")
-        if isinstance(message, UserMessage):
-            retrieved_context_list.append(f"{message.role}: {message.content}")
-        elif isinstance(message, AssistantMessage):
+        if isinstance(message, AssistantMessage) and message.is_tool_call():
             tool_calls = None
-            if message.is_tool_call():
-                for tc in message.tool_calls:
-                    retrieved_context_list.append(f"<tool_call>{tc.name}({tc.arguments})</tool_call>")
+            for tc in message.tool_calls:
+                retrieved_context_list.append(f"<tool_call>{tc.name}({tc.arguments})</tool_call>")
         elif isinstance(message, ToolMessage):
             retrieved_context_list.append(f"<tool_response>{message.content}</tool_response>")
+        else:
+            retrieved_context_list.append(f"{message.role}: {message.content}")
         
     retrieved_context = "\n".join(retrieved_context_list)
     prompt = all_prompts["tool_calling_template"].substitute(
