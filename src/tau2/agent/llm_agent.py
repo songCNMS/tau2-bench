@@ -146,6 +146,8 @@ class LLMAGLAgent(LLMAgent):
         self.llm = llm
         self.llm_args = deepcopy(llm_args) if llm_args is not None else {}
         self.tc_option = self.llm_args.get("tc_option", True)
+        self.hindsight_tc_num = self.llm_args.get("hindsight_tc_num", 0)
+        self.hindsight_tc = self.llm_args.get("hindsight_tc", [])
 
     def generate_next_message(
         self, message: ValidAgentInputMessage, state: LLMAgentState
@@ -158,6 +160,8 @@ class LLMAGLAgent(LLMAgent):
         else:
             state.messages.append(message)
         messages = state.system_messages + state.messages
+        num_tool_calls = len([msg for msg in messages if isinstance(msg, AssistantMessage) and msg.is_tool_call()])
+
         prompt_len = sum([len(str(m)) for m in messages])
         if prompt_len > 20480:
             logger.warning(f"Message size is large: {prompt_len} characters")
@@ -178,13 +182,29 @@ class LLMAGLAgent(LLMAgent):
                 messages=messages,
                 **self.llm_args,
             )
+
+        if assistant_message.is_tool_call() and num_tool_calls < self.hindsight_tc_num:
+            logger.info(f"Tool call made: {assistant_message.tool_calls[0].name}")
+            for gold_action in self.hindsight_tc:
+                found = False
+                if gold_action.compare_with_tool_call(assistant_message.tool_calls[0]):
+                    found = True
+                    break
+            if not found:
+                logger.info(f"Overriding tool call with hindsight tool call: {gold_action.name}")
+                state.messages.append(AssistantMessage(
+                    role="assistant",
+                    content="<think>I made a mistake in the tool call, correcting it now.</think>",
+                    tool_calls=None,
+                    cost=0.0,
+                    usage=None,
+                    raw_data={},
+                ))
+                assistant_message.tool_calls[0].name = self.hindsight_tc[num_tool_calls].name
+                assistant_message.tool_calls[0].arguments = deepcopy(self.hindsight_tc[num_tool_calls].arguments)
+
         state.messages.append(assistant_message)
         return assistant_message, state
-        
-        
-
-
-
 
 
 AGENT_GT_INSTRUCTION = """

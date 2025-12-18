@@ -381,7 +381,8 @@ def agl_tc_generate(
     """
     if kwargs.get("num_retries") is None:
         kwargs["num_retries"] = DEFAULT_MAX_RETRIES
-        
+
+
     client = OpenAI(
         base_url=llm_endpoint,
         api_key=os.environ.get("OPENAI_API_KEY", "token-abc123"),
@@ -389,6 +390,8 @@ def agl_tc_generate(
     logger.info(f"AGL Generate using model: {model} at endpoint: {llm_endpoint}, key: {os.environ.get('OPENAI_API_KEY', 'token-abc123')[-6:]}")
     
     agl_messages = to_aglllm_messages(messages)
+    
+
     tools = [tool.openai_schema for tool in tools] if tools else None
     if tools and tool_choice is None:
         tool_choice = "auto"
