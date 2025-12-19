@@ -159,14 +159,26 @@ class LLMAGLAgent(LLMAgent):
             state.messages.extend(message.tool_messages)
         else:
             state.messages.append(message)
-        messages = state.system_messages + state.messages
-        num_tool_calls = len([msg for msg in messages if isinstance(msg, AssistantMessage) and msg.is_tool_call()])
+        
+        system_messages = deepcopy(state.system_messages)
+        num_tool_calls = len([msg for msg in state.messages if isinstance(msg, AssistantMessage) and msg.is_tool_call()])
+        
+        if num_tool_calls < self.hindsight_tc_num:
+            hint_tc_instruction = f"You have made {num_tool_calls} tool calls so far. You are expected to make {self.hindsight_tc_num} tool calls in total. Please refer to the following expected tool calls to guide your next tool call:\n"
+            for i in range(num_tool_calls, len(self.hindsight_tc)):
+                hint_tc_instruction += f"- {self.hindsight_tc[i].get_func_format()}\n"
+            system_messages.append(SystemMessage(role="system", content=hint_tc_instruction))
+
+        messages = system_messages + state.messages
 
         prompt_len = sum([len(str(m)) for m in messages])
         if prompt_len > 20480:
             logger.warning(f"Message size is large: {prompt_len} characters")
-            messages = state.system_messages + state.messages[-4:]
+            messages = system_messages + state.messages[-4:]
 
+        
+
+        
         logger.info(f"llm_args: {self.llm_args}")
         if self.tc_option == "true":
             assistant_message = agl_tc_generate(
@@ -183,25 +195,25 @@ class LLMAGLAgent(LLMAgent):
                 **self.llm_args,
             )
 
-        if assistant_message.is_tool_call() and num_tool_calls < self.hindsight_tc_num:
-            logger.info(f"Tool call made: {assistant_message.tool_calls[0].name}")
-            for gold_action in self.hindsight_tc:
-                found = False
-                if gold_action.compare_with_tool_call(assistant_message.tool_calls[0]):
-                    found = True
-                    break
-            if not found:
-                logger.info(f"Overriding tool call with hindsight tool call: {gold_action.name}")
-                state.messages.append(AssistantMessage(
-                    role="assistant",
-                    content="<think>I made a mistake in the tool call, correcting it now.</think>",
-                    tool_calls=None,
-                    cost=0.0,
-                    usage=None,
-                    raw_data={},
-                ))
-                assistant_message.tool_calls[0].name = self.hindsight_tc[num_tool_calls].name
-                assistant_message.tool_calls[0].arguments = deepcopy(self.hindsight_tc[num_tool_calls].arguments)
+        # if assistant_message.is_tool_call() and num_tool_calls < self.hindsight_tc_num:
+        #     logger.info(f"Tool call made: {assistant_message.tool_calls[0].name}")
+        #     for gold_action in self.hindsight_tc:
+        #         found = False
+        #         if gold_action.compare_with_tool_call(assistant_message.tool_calls[0]):
+        #             found = True
+        #             break
+        #     if not found:
+        #         logger.info(f"Overriding tool call with hindsight tool call: {gold_action.name}")
+        #         state.messages.append(AssistantMessage(
+        #             role="assistant",
+        #             content="<think>I made a mistake in the tool call, correcting it now.</think>",
+        #             tool_calls=None,
+        #             cost=0.0,
+        #             usage=None,
+        #             raw_data={},
+        #         ))
+        #         assistant_message.tool_calls[0].name = self.hindsight_tc[num_tool_calls].name
+        #         assistant_message.tool_calls[0].arguments = deepcopy(self.hindsight_tc[num_tool_calls].arguments)
 
         state.messages.append(assistant_message)
         return assistant_message, state
