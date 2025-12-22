@@ -164,10 +164,20 @@ class LLMAGLAgent(LLMAgent):
         num_tool_calls = len([msg for msg in state.messages if isinstance(msg, AssistantMessage) and msg.is_tool_call()])
         
         if num_tool_calls < self.hindsight_tc_num:
-            hint_tc_instruction = f"You have made {num_tool_calls} tool calls so far. You are expected to make {self.hindsight_tc_num} tool calls in total. Please refer to the following expected tool calls to guide your next tool call:\n"
-            for i in range(num_tool_calls, len(self.hindsight_tc)):
-                hint_tc_instruction += f"- {self.hindsight_tc[i].get_func_format()}\n"
-            system_messages.append(SystemMessage(role="system", content=hint_tc_instruction))
+            hint_tc_instruction = "If decide to call a tool, DO consider call one of the following tools as your next decision:\n"
+            for golden_action in self.hindsight_tc:
+                found = False
+                for message in state.messages:
+                    if not isinstance(message, AssistantMessage) or not message.is_tool_call():
+                        continue
+                    if golden_action.compare_with_tool_call(message.tool_calls[0]):
+                        found = True
+                        break
+                if not found:
+                    hint_tc_instruction += f"- {golden_action.get_func_format()}\n"
+
+            system_messages[-1].content = system_messages[-1].content + ("<hint>" + hint_tc_instruction + "</hint>")
+            
 
         messages = system_messages + state.messages
 
@@ -175,8 +185,6 @@ class LLMAGLAgent(LLMAgent):
         if prompt_len > 20480:
             logger.warning(f"Message size is large: {prompt_len} characters")
             messages = system_messages + state.messages[-4:]
-
-        
 
         
         logger.info(f"llm_args: {self.llm_args}")
@@ -216,6 +224,8 @@ class LLMAGLAgent(LLMAgent):
         #         assistant_message.tool_calls[0].arguments = deepcopy(self.hindsight_tc[num_tool_calls].arguments)
 
         state.messages.append(assistant_message)
+        # logger.info(f"hint_tc_instruction: {system_messages}")
+        # logger.info(f"messages: {assistant_message}")
         return assistant_message, state
 
 
