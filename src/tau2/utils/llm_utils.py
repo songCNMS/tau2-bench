@@ -298,6 +298,17 @@ def generate(
                 tool_choice=tool_choice,
                 **kwargs,
             )
+        elif os.getenv("OPENAI_API_TYPE", "KEY").lower() == "vllm":
+            response = completion(
+                model=model,
+                messages=litellm_messages,
+                tools=tools,
+                api_key=os.getenv("AZURE_OPENAI_VLLM_API_KEY"),
+                azure_endpoint=os.getenv("AZURE_OPENAI_VLLM_ENDPOINT"),
+                api_version=os.getenv("OPENAI_API_VERSION"),
+                tool_choice=tool_choice,
+                **kwargs,
+            )
         else:
             scope = os.environ.get("AZURE_BEARER_TOKEN_SCOPE", "api://trapi/.default")
             client_id = os.environ.get("AZURE_CLIENT_ID")
