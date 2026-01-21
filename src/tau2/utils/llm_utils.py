@@ -304,7 +304,7 @@ def generate(
                 messages=litellm_messages,
                 tools=tools,
                 api_key=os.getenv("AZURE_OPENAI_VLLM_API_KEY"),
-                azure_endpoint=os.getenv("AZURE_OPENAI_VLLM_ENDPOINT"),
+                api_base=os.getenv("AZURE_OPENAI_VLLM_ENDPOINT"),
                 api_version=os.getenv("OPENAI_API_VERSION"),
                 tool_choice=tool_choice,
                 **kwargs,

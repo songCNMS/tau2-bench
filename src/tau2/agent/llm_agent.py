@@ -148,6 +148,7 @@ class LLMAGLAgent(LLMAgent):
         self.tc_option = self.llm_args.get("tc_option", True)
         self.hindsight_tc_num = self.llm_args.get("hindsight_tc_num", 0)
         self.hindsight_tc = self.llm_args.get("hindsight_tc", [])
+        self.tag = self.llm_args.get("tag", "")
 
     def generate_next_message(
         self, message: ValidAgentInputMessage, state: LLMAgentState
@@ -176,8 +177,9 @@ class LLMAGLAgent(LLMAgent):
                 if not found:
                     hint_tc_instruction += f"- {golden_action.get_func_format()}\n"
 
-            system_messages[-1].content = system_messages[-1].content + ("<hint>" + hint_tc_instruction + "</hint>")
+            system_messages[-1].content = system_messages[-1].content + (" <hint> " + hint_tc_instruction + " </hint> ")
             
+        system_messages[-1].content = system_messages[-1].content + "\n" + self.tag
 
         messages = system_messages + state.messages
 
