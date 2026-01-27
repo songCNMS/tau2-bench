@@ -184,7 +184,7 @@ class LLMAGLAgent(LLMAgent):
         messages = system_messages + state.messages
 
         prompt_len = sum([len(str(m)) for m in messages])
-        if prompt_len > 20480:
+        if prompt_len > 102400:
             logger.warning(f"Message size is large: {prompt_len} characters")
             messages = system_messages + state.messages[-4:]
 
