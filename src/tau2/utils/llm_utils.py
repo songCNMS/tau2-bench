@@ -407,6 +407,8 @@ def agl_tc_generate(
     if tools and tool_choice is None:
         tool_choice = "auto"
     try:
+        models = client.models.list()
+        model = models.data[0].id
         response = client.chat.completions.create(
             model=model,
             messages=agl_messages,
